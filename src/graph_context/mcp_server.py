@@ -558,6 +558,23 @@ def plan_add_intent(plan_id: str, description: str, rationale: str = "",
     return json.dumps({"intent_id": intent_id, "plan_id": plan_id})
 
 
+@mcp.tool()
+def plan_update_intent(intent_id: str, status: str | None = None,
+                       description: str | None = None) -> str:
+    """Update an intent's status or description.
+
+    Args:
+        intent_id: The intent ID to update
+        status: New status: draft, active, completed, abandoned
+        description: New description (optional)
+    """
+    store = _open_store()
+    mgr = PlanManager(store)
+    if mgr.update_intent(intent_id, status=status, description=description):
+        return f"Updated intent {intent_id}"
+    return f"Intent '{intent_id}' not found"
+
+
 # ---------------------------------------------------------------------------
 # Utility tools
 # ---------------------------------------------------------------------------
