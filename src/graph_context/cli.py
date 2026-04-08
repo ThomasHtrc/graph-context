@@ -65,11 +65,22 @@ def setup(ctx: click.Context) -> None:
     Run this in your project root to get started with graph-context and Claude Code.
     """
     repo = ctx.obj["repo"]
+    project_dir = config.get_project_dir(repo)
+
+    # Check if already set up
+    meta = config.load_meta(repo)
+    mcp_exists = (Path(repo) / ".mcp.json").exists()
+    claude_md = Path(repo) / "CLAUDE.md"
+    claude_md_has_gc = claude_md.exists() and "graph-context" in claude_md.read_text()
+
+    if meta and meta.get("initialized") and mcp_exists and claude_md_has_gc:
+        click.echo("graph-context is already set up in this project.")
+        click.echo("To re-index, run: graph-context index")
+        click.echo("To re-index from scratch, run: graph-context index --clean")
+        return
 
     # Init
-    project_dir = config.get_project_dir(repo)
     project_dir.mkdir(parents=True, exist_ok=True)
-    meta = config.load_meta(repo)
     if not meta:
         config.save_meta(repo, {"initialized": True, "last_commit": None})
         meta = config.load_meta(repo)
