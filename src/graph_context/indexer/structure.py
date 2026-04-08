@@ -12,14 +12,15 @@ from pathlib import Path
 from ..storage.store import GraphStore
 from .extractors.base import FileExtraction, EdgeRef, SymbolNode
 from .extractors.python import PythonExtractor
+from .extractors.typescript import TypeScriptExtractor, TSXExtractor, JavaScriptExtractor
 from . import git_ops
 
 # Registry of extractors by file extension
 EXTRACTORS = {}
 
-_py = PythonExtractor()
-for ext in _py.extensions:
-    EXTRACTORS[ext] = _py
+for _extractor in (PythonExtractor(), TypeScriptExtractor(), TSXExtractor(), JavaScriptExtractor()):
+    for ext in _extractor.extensions:
+        EXTRACTORS[ext] = _extractor
 
 
 def _file_hash(path: Path) -> str:
