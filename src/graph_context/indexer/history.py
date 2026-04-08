@@ -60,11 +60,10 @@ class HistoryIndexer:
         stats: dict,
     ) -> None:
         """Index a single commit: create Commit node, Change nodes, and edges."""
-        # Create Commit node
+        # Create or update Commit node
         self.store.execute(
-            """CREATE (c:Commit {
-                hash: $hash, message: $msg, author: $author, timestamp: $ts
-            })""",
+            """MERGE (c:Commit {hash: $hash})
+               SET c.message = $msg, c.author = $author, c.timestamp = $ts""",
             {"hash": commit.hash, "msg": commit.message, "author": commit.author, "ts": commit.timestamp},
         )
         stats["commits"] += 1
@@ -86,12 +85,11 @@ class HistoryIndexer:
         for change in commit.changes:
             change_id = f"{commit.hash}::{change.file_path}"
 
-            # Create Change node
+            # Create or update Change node
             self.store.execute(
-                """CREATE (ch:Change {
-                    id: $id, file_path: $fp, additions: $adds,
-                    deletions: $dels, change_type: $ct
-                })""",
+                """MERGE (ch:Change {id: $id})
+                   SET ch.file_path = $fp, ch.additions = $adds,
+                       ch.deletions = $dels, ch.change_type = $ct""",
                 {
                     "id": change_id, "fp": change.file_path,
                     "adds": change.additions, "dels": change.deletions,

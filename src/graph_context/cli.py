@@ -93,8 +93,9 @@ def setup(ctx: click.Context) -> None:
 @cli.command()
 @click.option("--incremental", is_flag=True, help="Only index changed files.")
 @click.option("--layer", type=click.Choice(["structure", "history", "planning", "all"]), default="all")
+@click.option("--clean", is_flag=True, help="Clear existing data before re-indexing.")
 @click.pass_context
-def index(ctx: click.Context, incremental: bool, layer: str) -> None:
+def index(ctx: click.Context, incremental: bool, layer: str, clean: bool) -> None:
     """Index the codebase into the graph."""
     repo = ctx.obj["repo"]
     db_path = config.get_db_path(repo)
@@ -125,6 +126,9 @@ def index(ctx: click.Context, incremental: bool, layer: str) -> None:
 
         if layer in ("history", "all"):
             if git_ops.is_git_repo(repo):
+                if clean:
+                    store.clear_history()
+                    click.echo("Cleared existing history data.")
                 hist_indexer = HistoryIndexer(store, repo)
                 t0 = time.time()
 

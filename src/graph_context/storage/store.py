@@ -83,6 +83,14 @@ class GraphStore:
 
     # -- bulk write helpers ---------------------------------------------------
 
+    def clear_history(self) -> None:
+        """Remove all history nodes (Commit, Change) and their edges.
+
+        Used for clean re-indexing of git history (Layer 2).
+        """
+        self.conn.execute("MATCH (ch:Change) DETACH DELETE ch")
+        self.conn.execute("MATCH (c:Commit) DETACH DELETE c")
+
     def clear_file(self, file_path: str) -> None:
         """Remove all nodes and edges originating from a given source file.
 
