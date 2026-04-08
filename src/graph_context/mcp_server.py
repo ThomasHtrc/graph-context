@@ -408,6 +408,60 @@ def co_changes(file: str) -> str:
     return json.dumps(results, indent=2)
 
 
+@mcp.tool()
+def search_commits(query: str, author: str | None = None, limit: int = 20) -> str:
+    """Search commit messages for a term (case-insensitive).
+
+    Use this to find cross-cutting concerns (e.g. "MNPI", "auth refactor")
+    that span many files and can't be found by file path alone.
+
+    Args:
+        query: Search string to match against commit messages
+        author: Optional author name filter (case-insensitive)
+        limit: Max results (default 20)
+    """
+    store = _open_store()
+
+    if author:
+        rows = store.query(
+            """
+            MATCH (c:Commit)
+            WHERE lower(c.message) CONTAINS lower($q)
+              AND lower(c.author) CONTAINS lower($a)
+            OPTIONAL MATCH (f:File)-[:CHANGED_IN]->(c)
+            RETURN c.hash, c.message, c.author, c.timestamp,
+                   collect(f.path) AS files
+            ORDER BY c.timestamp DESC
+            LIMIT $lim
+            """,
+            {"q": query, "a": author, "lim": limit},
+        )
+    else:
+        rows = store.query(
+            """
+            MATCH (c:Commit)
+            WHERE lower(c.message) CONTAINS lower($q)
+            OPTIONAL MATCH (f:File)-[:CHANGED_IN]->(c)
+            RETURN c.hash, c.message, c.author, c.timestamp,
+                   collect(f.path) AS files
+            ORDER BY c.timestamp DESC
+            LIMIT $lim
+            """,
+            {"q": query, "lim": limit},
+        )
+
+    if not rows:
+        return f"No commits matching '{query}'"
+    results = [
+        {
+            "hash": r[0], "message": r[1], "author": r[2],
+            "timestamp": r[3], "files": r[4],
+        }
+        for r in rows
+    ]
+    return json.dumps(results, indent=2)
+
+
 # ---------------------------------------------------------------------------
 # Plan management tools
 # ---------------------------------------------------------------------------
@@ -485,17 +539,22 @@ def plan_update(plan_id: str, title: str | None = None,
 
 
 @mcp.tool()
-def plan_add_intent(plan_id: str, description: str, rationale: str = "") -> str:
+def plan_add_intent(plan_id: str, description: str, rationale: str = "",
+                    affected_files: list[str] | None = None) -> str:
     """Add an intent (a specific change step) to a plan.
 
     Args:
         plan_id: The plan to add the intent to
         description: What this intent will do
         rationale: Why this change is needed
+        affected_files: File paths this intent affects (auto-linked as plan targets)
     """
     store = _open_store()
     mgr = PlanManager(store)
-    intent_id = mgr.create_intent(plan_id, description=description, rationale=rationale)
+    intent_id = mgr.create_intent(
+        plan_id, description=description, rationale=rationale,
+        affected_files=affected_files,
+    )
     return json.dumps({"intent_id": intent_id, "plan_id": plan_id})
 
 

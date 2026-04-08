@@ -86,7 +86,7 @@ def format_annotated(ctx: AssembledContext) -> str:
     lines: list[str] = []
 
     for item in ctx.items:
-        if item.kind == "file_header":
+        if item.kind in ("file_header", "plan"):
             lines.append(item.content)
         else:
             annotation = f"[score={item.score:.2f}"

@@ -148,28 +148,86 @@ class PlanManager:
             for i in intents
         ]
 
+        # Progress
+        plan["progress"] = self.get_plan_progress(plan_id)
+
+        # Blocking: plans that depend on this one
+        blocking = self.store.query(
+            "MATCH (blocker:Plan)-[:DEPENDS_ON_PLAN]->(p:Plan {id: $id}) "
+            "RETURN blocker.id, blocker.title, blocker.status",
+            {"id": plan_id},
+        )
+        plan["blocking"] = [{"id": b[0], "title": b[1], "status": b[2]} for b in blocking]
+
+        # Blocked by incomplete dependencies
+        plan["blocked"] = any(d["status"] != "completed" for d in plan["depends_on"])
+
+        # Next intent: first incomplete intent
+        next_intent = self.store.query_one(
+            "MATCH (i:Intent)-[:IMPLEMENTS]->(p:Plan {id: $id}) "
+            "WHERE i.status IN ['draft', 'in_progress', 'active'] "
+            "RETURN i.id, i.description, i.status",
+            {"id": plan_id},
+        )
+        plan["next_intent"] = (
+            {"id": next_intent[0], "description": next_intent[1], "status": next_intent[2]}
+            if next_intent else None
+        )
+
         return plan
 
     def list_plans(self, status: str | None = None) -> list[dict]:
-        """List all plans, optionally filtered by status."""
+        """List all plans, optionally filtered by status, with progress."""
         if status:
             rows = self.store.query(
                 """MATCH (p:Plan)
                 WHERE p.status = $status
-                RETURN p.id, p.title, p.status, p.updated_at, p.author
+                OPTIONAL MATCH (i:Intent)-[:IMPLEMENTS]->(p)
+                WITH p, count(i) AS total_intents,
+                     count(CASE WHEN i.status = 'completed' THEN 1 END) AS done_intents
+                RETURN p.id, p.title, p.status, p.updated_at, p.author,
+                       total_intents, done_intents
                 ORDER BY p.updated_at DESC""",
                 {"status": status},
             )
         else:
             rows = self.store.query(
                 """MATCH (p:Plan)
-                RETURN p.id, p.title, p.status, p.updated_at, p.author
+                OPTIONAL MATCH (i:Intent)-[:IMPLEMENTS]->(p)
+                WITH p, count(i) AS total_intents,
+                     count(CASE WHEN i.status = 'completed' THEN 1 END) AS done_intents
+                RETURN p.id, p.title, p.status, p.updated_at, p.author,
+                       total_intents, done_intents
                 ORDER BY p.updated_at DESC""",
             )
         return [
-            {"id": r[0], "title": r[1], "status": r[2], "updated_at": r[3], "author": r[4]}
+            {
+                "id": r[0], "title": r[1], "status": r[2],
+                "updated_at": r[3], "author": r[4],
+                "progress": f"{r[6]}/{r[5]}" if r[5] > 0 else "no intents",
+            }
             for r in rows
         ]
+
+    def get_plan_progress(self, plan_id: str) -> dict:
+        """Calculate completion percentage from intent statuses."""
+        rows = self.store.query(
+            "MATCH (i:Intent)-[:IMPLEMENTS]->(p:Plan {id: $id}) "
+            "RETURN i.status, count(i)",
+            {"id": plan_id},
+        )
+        total = sum(r[1] for r in rows)
+        if total == 0:
+            return {"total": 0, "completed": 0, "in_progress": 0, "draft": 0, "pct": 0}
+        status_counts = {r[0]: r[1] for r in rows}
+        completed = status_counts.get("completed", 0)
+        return {
+            "total": total,
+            "completed": completed,
+            "in_progress": status_counts.get("in_progress", 0) + status_counts.get("active", 0),
+            "draft": status_counts.get("draft", 0),
+            "pct": round(100 * completed / total),
+        }
 
     def delete_plan(self, plan_id: str) -> bool:
         """Delete a plan and its edges."""
@@ -189,8 +247,12 @@ class PlanManager:
         description: str,
         rationale: str = "",
         status: str = "draft",
+        affected_files: list[str] | None = None,
     ) -> str:
-        """Create an Intent node linked to a Plan. Returns intent id."""
+        """Create an Intent node linked to a Plan. Returns intent id.
+
+        If affected_files is provided, auto-links them as plan targets.
+        """
         intent_id = _new_id()
         self.store.execute(
             """CREATE (i:Intent {
@@ -199,6 +261,10 @@ class PlanManager:
             {"id": intent_id, "descr": description, "rat": rationale, "status": status},
         )
         self.store.create_edge("IMPLEMENTS", "Intent", intent_id, "Plan", plan_id)
+
+        if affected_files:
+            self._link_targets(plan_id, affected_files)
+
         return intent_id
 
     def update_intent(self, intent_id: str, status: str | None = None, description: str | None = None) -> bool:

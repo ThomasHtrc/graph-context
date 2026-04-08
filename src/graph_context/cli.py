@@ -451,6 +451,43 @@ def query_affected_symbols(ctx: click.Context, commit_hash: str, fmt: str) -> No
         _output(rows, ["kind", "name", "file", "changed_file"], fmt)
 
 
+@query.command("search-commits")
+@click.argument("search_query")
+@click.option("--author", default=None, help="Filter by author (case-insensitive).")
+@click.option("--limit", "max_results", default=20, help="Max results.")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_search_commits(ctx: click.Context, search_query: str, author: str | None, max_results: int, fmt: str) -> None:
+    """Search commit messages for a term (case-insensitive)."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        if author:
+            rows = store.query(
+                """
+                MATCH (c:Commit)
+                WHERE lower(c.message) CONTAINS lower($q)
+                  AND lower(c.author) CONTAINS lower($a)
+                RETURN c.hash, c.message, c.author, c.timestamp
+                ORDER BY c.timestamp DESC
+                LIMIT $lim
+                """,
+                {"q": search_query, "a": author, "lim": max_results},
+            )
+        else:
+            rows = store.query(
+                """
+                MATCH (c:Commit)
+                WHERE lower(c.message) CONTAINS lower($q)
+                RETURN c.hash, c.message, c.author, c.timestamp
+                ORDER BY c.timestamp DESC
+                LIMIT $lim
+                """,
+                {"q": search_query, "lim": max_results},
+            )
+        _output(rows, ["hash", "message", "author", "timestamp"], fmt)
+
+
 # ---------------------------------------------------------------------------
 # plan queries (on the query subgroup)
 # ---------------------------------------------------------------------------

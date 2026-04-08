@@ -156,6 +156,14 @@ class Assembler:
                 used_tokens += tokens
                 symbols_count += 1
 
+        # Append active plan annotations if budget remains
+        if self.store and focal_points:
+            plan_items = self._get_plan_annotations(focal_points, budget - used_tokens)
+            for item in plan_items:
+                if used_tokens + item.tokens <= budget:
+                    items.append(item)
+                    used_tokens += item.tokens
+
         return AssembledContext(
             items=items,
             total_tokens=used_tokens,
@@ -164,6 +172,58 @@ class Assembler:
             files_included=len(files_seen),
             symbols_included=symbols_count,
         )
+
+    def _get_plan_annotations(self, focal_points: list[str], remaining_budget: int) -> list[ContextItem]:
+        """Find active plans targeting focal files and render as context items."""
+        items: list[ContextItem] = []
+        seen_plans: set[str] = set()
+
+        for fp in focal_points:
+            # Find active plans targeting this file (or files matching it)
+            rows = self.store.query(
+                """MATCH (p:Plan)-[:TARGETS_FILE]->(f:File)
+                WHERE p.status = 'active'
+                  AND (f.path = $fp OR f.path ENDS WITH $suffix)
+                RETURN DISTINCT p.id, p.title, p.description""",
+                {"fp": fp, "suffix": "/" + fp.strip("/")},
+            )
+            # Also check module targets
+            mod_rows = self.store.query(
+                """MATCH (p:Plan)-[:TARGETS_MODULE]->(m:Module)
+                WHERE p.status = 'active'
+                  AND (m.path = $fp OR m.path ENDS WITH $suffix)
+                RETURN DISTINCT p.id, p.title, p.description""",
+                {"fp": fp, "suffix": "/" + fp.strip("/")},
+            )
+            for r in rows + mod_rows:
+                plan_id, title, description = r[0], r[1], r[2]
+                if plan_id in seen_plans:
+                    continue
+                seen_plans.add(plan_id)
+
+                # Get pending intents
+                intent_rows = self.store.query(
+                    "MATCH (i:Intent)-[:IMPLEMENTS]->(p:Plan {id: $id}) "
+                    "WHERE i.status IN ['draft', 'in_progress', 'active'] "
+                    "RETURN i.description, i.status",
+                    {"id": plan_id},
+                )
+                text = f"## Active Plan: {title}\n{description}"
+                if intent_rows:
+                    text += "\nPending intents:"
+                    for ir in intent_rows:
+                        text += f"\n  - [{ir[1]}] {ir[0]}"
+
+                tokens = estimate_tokens(text)
+                if tokens <= remaining_budget:
+                    items.append(ContextItem(
+                        kind="plan", file_path="", name=title,
+                        content=text, tokens=tokens, score=1.0,
+                        metadata={"plan_id": plan_id},
+                    ))
+                    remaining_budget -= tokens
+
+        return items
 
     def _expand_file_nodes(self, ranked_nodes: list[RankedNode]) -> list[RankedNode]:
         """Expand File nodes that have no symbol children in the ranked list.
