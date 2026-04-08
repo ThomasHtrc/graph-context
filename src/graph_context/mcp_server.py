@@ -563,6 +563,81 @@ def plan_add_intent(plan_id: str, description: str, rationale: str = "",
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+def dead_code(path: str | None = None, include_methods: bool = False) -> str:
+    """Find functions that are never called — likely dead code.
+
+    Identifies functions with zero inbound CALLS edges. Filters out common
+    entry points (main, __init__, test functions, CLI commands, etc.).
+
+    Args:
+        path: Optional file or module path to scope the search
+        include_methods: Include class methods (default False — methods are
+                         often called via dynamic dispatch which the static
+                         graph can't see)
+    """
+    store = _open_store()
+
+    if path:
+        path = _resolve_path(store, path)
+        rows = store.query(
+            """
+            MATCH (f:Function)
+            WHERE f.file_path STARTS WITH $prefix
+            OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+            WITH f, count(caller) AS caller_count
+            WHERE caller_count = 0
+            RETURN f.name, f.file_path, f.line_start, f.signature, f.is_method
+            ORDER BY f.file_path, f.line_start
+            """,
+            {"prefix": path},
+        )
+    else:
+        rows = store.query(
+            """
+            MATCH (f:Function)
+            OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+            WITH f, count(caller) AS caller_count
+            WHERE caller_count = 0
+            RETURN f.name, f.file_path, f.line_start, f.signature, f.is_method
+            ORDER BY f.file_path, f.line_start
+            """,
+        )
+
+    if not rows:
+        return "No dead code candidates found."
+
+    # Filter out known entry points and optionally methods
+    entry_patterns = {
+        "main", "__init__", "__main__", "setup", "teardown",
+        "setUp", "tearDown", "setUpClass", "tearDownClass",
+    }
+    entry_prefixes = ("test_", "Test")
+
+    results = []
+    for r in rows:
+        name, file_path, line, sig, is_method = r[0], r[1], r[2], r[3], r[4]
+
+        # Skip known entry points
+        if name in entry_patterns:
+            continue
+        if any(name.startswith(p) for p in entry_prefixes):
+            continue
+
+        # Skip methods unless explicitly included
+        if is_method and not include_methods:
+            continue
+
+        results.append({
+            "name": name, "file": file_path, "line": line,
+            "signature": sig or "",
+        })
+
+    if not results:
+        return "No dead code candidates found (after filtering entry points)."
+    return json.dumps(results, indent=2)
+
+
+@mcp.tool()
 def graph_stats() -> str:
     """Show graph statistics — node and edge counts by type.
 

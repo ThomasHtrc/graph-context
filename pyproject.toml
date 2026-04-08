@@ -21,10 +21,14 @@ dependencies = [
 mcp = [
     "mcp>=1.0.0",
 ]
+watch = [
+    "watchfiles>=1.0.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-tmp-files>=0.0.2",
     "mcp>=1.0.0",
+    "watchfiles>=1.0.0",
 ]
 
 [project.scripts]

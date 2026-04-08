@@ -98,6 +98,29 @@ def setup(ctx: click.Context) -> None:
 
 
 # ---------------------------------------------------------------------------
+# watch
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--quiet", "-q", is_flag=True, help="Suppress per-file output.")
+@click.pass_context
+def watch(ctx: click.Context, quiet: bool) -> None:
+    """Watch for file changes and auto-reindex.
+
+    Monitors supported source files and re-indexes them on save.
+    Uses watchfiles (Rust-backed) with 1.6s debounce for batching rapid saves.
+    """
+    repo = ctx.obj["repo"]
+    meta = config.load_meta(repo)
+    if not meta or not meta.get("initialized"):
+        click.echo("Error: graph-context not initialized. Run `graph-context setup` first.")
+        raise SystemExit(1)
+
+    from .watcher import run_watcher
+    run_watcher(repo, quiet=quiet)
+
+
+# ---------------------------------------------------------------------------
 # index
 # ---------------------------------------------------------------------------
 
@@ -486,6 +509,67 @@ def query_search_commits(ctx: click.Context, search_query: str, author: str | No
                 {"q": search_query, "lim": max_results},
             )
         _output(rows, ["hash", "message", "author", "timestamp"], fmt)
+
+
+@query.command("dead-code")
+@click.option("--path", default=None, help="Scope to a file or module path.")
+@click.option("--include-methods", is_flag=True, help="Include class methods.")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_dead_code(ctx: click.Context, path: str | None, include_methods: bool, fmt: str) -> None:
+    """Find functions that are never called (likely dead code)."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+
+        if path:
+            rows = store.query(
+                """
+                MATCH (f:Function)
+                WHERE f.file_path STARTS WITH $prefix
+                OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+                WITH f, count(caller) AS caller_count
+                WHERE caller_count = 0
+                RETURN f.name, f.file_path, f.line_start, f.signature, f.is_method
+                ORDER BY f.file_path, f.line_start
+                """,
+                {"prefix": path},
+            )
+        else:
+            rows = store.query(
+                """
+                MATCH (f:Function)
+                OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
+                WITH f, count(caller) AS caller_count
+                WHERE caller_count = 0
+                RETURN f.name, f.file_path, f.line_start, f.signature, f.is_method
+                ORDER BY f.file_path, f.line_start
+                """,
+            )
+
+        entry_patterns = {
+            "main", "__init__", "__main__", "setup", "teardown",
+            "setUp", "tearDown", "setUpClass", "tearDownClass",
+        }
+        entry_prefixes = ("test_", "Test")
+
+        filtered = []
+        for r in rows:
+            name, is_method = r[0], r[4]
+            if name in entry_patterns:
+                continue
+            if any(name.startswith(p) for p in entry_prefixes):
+                continue
+            if is_method and not include_methods:
+                continue
+            filtered.append(r[:4])  # name, file_path, line_start, signature
+
+        if fmt == "json":
+            import json as json_mod
+            data = [{"name": r[0], "file": r[1], "line": r[2], "signature": r[3] or ""} for r in filtered]
+            click.echo(json_mod.dumps(data, indent=2))
+        else:
+            _output(filtered, ["name", "file", "line", "signature"], fmt)
 
 
 # ---------------------------------------------------------------------------

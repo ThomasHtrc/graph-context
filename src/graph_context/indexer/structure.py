@@ -115,6 +115,34 @@ class StructureIndexer:
 
         return stats
 
+    def index_files(self, rel_paths: list[str]) -> dict:
+        """Re-index specific files by relative path (for file watcher use)."""
+        self.store.ensure_schema(layers=("structure",))
+        stats = {"files_indexed": 0, "nodes_created": 0, "edges_created": 0, "errors": 0}
+
+        for rel_path in rel_paths:
+            ext = _file_ext(rel_path)
+            if ext not in EXTRACTORS:
+                continue
+            abs_path = self.repo_path / rel_path
+            if not abs_path.is_file():
+                self.store.clear_file(rel_path)
+                continue
+
+            self.store.clear_file(rel_path)
+            try:
+                file_stats = self._index_file(rel_path, abs_path)
+                stats["files_indexed"] += 1
+                stats["nodes_created"] += file_stats["nodes"]
+                stats["edges_created"] += file_stats["edges"]
+            except Exception:
+                stats["errors"] += 1
+
+        # Resolve cross-file references for the changed files
+        resolved = self._resolve_references()
+        stats["edges_resolved"] = resolved
+        return stats
+
     def _index_file(self, rel_path: str, abs_path: Path) -> dict:
         """Index a single file: parse, extract, write to graph."""
         ext = _file_ext(rel_path)
