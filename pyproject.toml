@@ -14,16 +14,22 @@ dependencies = [
     "tree-sitter-javascript>=0.25.0",
     "tree-sitter-typescript>=0.23.0",
     "click>=8.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=1.0.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-tmp-files>=0.0.2",
+    "mcp>=1.0.0",
 ]
 
 [project.scripts]
 graph-context = "graph_context.cli:cli"
+graph-context-mcp = "graph_context.mcp_server:run_server"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/graph_context"]
