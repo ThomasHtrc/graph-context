@@ -202,27 +202,27 @@ class _ExtractionContext:
                         ))
 
     def _visit_assignment(self, node: Node) -> None:
-        """Extract module-level variable assignments."""
-        # Only capture top-level assignments (not inside functions/classes)
-        if self._scope:
-            return
+        """Extract module-level variable assignments and recurse into RHS for calls."""
+        # Only capture variables for top-level assignments
+        if not self._scope:
+            left = node.child_by_field_name("left")
+            if left and left.type == "identifier":
+                name = self._text(left)
+                var_id = self._make_id(name)
 
-        left = node.child_by_field_name("left")
-        if not left or left.type != "identifier":
-            return
+                self.nodes.append(SymbolNode(
+                    kind="variable",
+                    id=var_id,
+                    name=name,
+                    file_path=self.file_path,
+                    line_start=node.start_point[0] + 1,
+                    line_end=node.end_point[0] + 1,
+                ))
+                self.edges.append(EdgeRef("CONTAINS_VAR", "File", self.file_path, "Variable", var_id))
 
-        name = self._text(left)
-        var_id = self._make_id(name)
-
-        self.nodes.append(SymbolNode(
-            kind="variable",
-            id=var_id,
-            name=name,
-            file_path=self.file_path,
-            line_start=node.start_point[0] + 1,
-            line_end=node.end_point[0] + 1,
-        ))
-        self.edges.append(EdgeRef("CONTAINS_VAR", "File", self.file_path, "Variable", var_id))
+        # Always recurse into children to find nested calls (e.g., x = self.method())
+        for child in node.children:
+            self.visit(child)
 
     def _visit_call(self, node: Node) -> None:
         """Extract function call edges."""

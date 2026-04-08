@@ -216,6 +216,6 @@ class GraphStore:
 
         self.conn.execute(
             f"MATCH (a:{from_table} {{{from_pk}: $fid}}), (b:{to_table} {{{to_pk}: $tid}}) "
-            f"CREATE (a)-[r:{rel_type}]->(b){prop_clause}",
+            f"MERGE (a)-[r:{rel_type}]->(b){prop_clause}",
             params,
         )

@@ -75,6 +75,32 @@ class TestPythonExtractor:
         assert "MAX_RETRIES" in names
         assert "DEBUG" in names
 
+    def test_extracts_self_method_calls(self):
+        source = b"""
+class Manager:
+    def process(self):
+        pass
+    def run(self):
+        result = self.process()
+        return result
+"""
+        result = self.ext.extract("test.py", source)
+        calls = [e for e in result.edges if e.kind == "CALLS"]
+        assert any(e.to_id == "process" and "run" in e.from_id for e in calls)
+
+    def test_extracts_calls_in_assignments(self):
+        source = b"""
+def outer():
+    x = helper()
+    return x
+
+def helper():
+    pass
+"""
+        result = self.ext.extract("test.py", source)
+        calls = [e for e in result.edges if e.kind == "CALLS"]
+        assert any(e.to_id == "helper" and "outer" in e.from_id for e in calls)
+
 
 # ---------------------------------------------------------------------------
 # TypeScript extractor
@@ -161,6 +187,19 @@ class TestTypeScriptExtractor:
         assert funcs["bar"] == "private"
         assert funcs["baz"] == "protected"
         assert funcs["qux"] == "public"
+
+    def test_extracts_this_method_calls(self):
+        source = b"""
+class Service {
+    process(): void {}
+    run(): void {
+        const result = this.process();
+    }
+}
+"""
+        result = self.ext.extract("test.ts", source)
+        calls = [e for e in result.edges if e.kind == "CALLS"]
+        assert any(e.to_id == "process" and "run" in e.from_id for e in calls)
 
 
 # ---------------------------------------------------------------------------

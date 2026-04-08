@@ -54,7 +54,7 @@ class StructureIndexer:
         else:
             files = self._walk_files()
 
-        stats = {"files_indexed": 0, "nodes_created": 0, "edges_created": 0, "skipped": 0}
+        stats = {"files_indexed": 0, "nodes_created": 0, "edges_created": 0, "skipped": 0, "errors": 0}
         for rel_path in files:
             ext = _file_ext(rel_path)
             if ext not in EXTRACTORS:
@@ -63,10 +63,15 @@ class StructureIndexer:
             abs_path = self.repo_path / rel_path
             if not abs_path.is_file():
                 continue
-            file_stats = self._index_file(rel_path, abs_path)
-            stats["files_indexed"] += 1
-            stats["nodes_created"] += file_stats["nodes"]
-            stats["edges_created"] += file_stats["edges"]
+            try:
+                # Clear stale data from previous indexing runs
+                self.store.clear_file(rel_path)
+                file_stats = self._index_file(rel_path, abs_path)
+                stats["files_indexed"] += 1
+                stats["nodes_created"] += file_stats["nodes"]
+                stats["edges_created"] += file_stats["edges"]
+            except Exception as exc:
+                stats["errors"] += 1
 
         # Build module nodes and BELONGS_TO edges
         self._build_modules(files)
@@ -85,7 +90,7 @@ class StructureIndexer:
             return self.index_full()
 
         changed = git_ops.get_changed_files(self.repo_path, since_hash)
-        stats = {"files_indexed": 0, "nodes_created": 0, "edges_created": 0, "skipped": 0}
+        stats = {"files_indexed": 0, "nodes_created": 0, "edges_created": 0, "skipped": 0, "errors": 0}
 
         for rel_path in changed:
             ext = _file_ext(rel_path)
@@ -100,10 +105,13 @@ class StructureIndexer:
 
             # Clear old data, re-index
             self.store.clear_file(rel_path)
-            file_stats = self._index_file(rel_path, abs_path)
-            stats["files_indexed"] += 1
-            stats["nodes_created"] += file_stats["nodes"]
-            stats["edges_created"] += file_stats["edges"]
+            try:
+                file_stats = self._index_file(rel_path, abs_path)
+                stats["files_indexed"] += 1
+                stats["nodes_created"] += file_stats["nodes"]
+                stats["edges_created"] += file_stats["edges"]
+            except Exception:
+                stats["errors"] += 1
 
         return stats
 
@@ -120,29 +128,32 @@ class StructureIndexer:
         mtime = datetime.fromtimestamp(abs_path.stat().st_mtime).isoformat()
         self.store.upsert_file(rel_path, extraction.lang, h, mtime)
 
-        # Create symbol nodes
+        # Create symbol nodes (skip duplicates gracefully)
         for sym in extraction.nodes:
-            if sym.kind == "function":
-                self.store.create_function(
-                    sym.id, sym.name, sym.file_path,
-                    sym.line_start, sym.line_end,
-                    sym.signature, sym.visibility, sym.is_method,
-                )
-            elif sym.kind == "class":
-                self.store.create_class(
-                    sym.id, sym.name, sym.file_path,
-                    sym.line_start, sym.line_end, sym.visibility,
-                )
-            elif sym.kind == "type":
-                self.store.create_type(
-                    sym.id, sym.name, sym.file_path,
-                    sym.line_start, sym.line_end,
-                )
-            elif sym.kind == "variable":
-                self.store.create_variable(
-                    sym.id, sym.name, sym.file_path,
-                    sym.line_start, sym.line_end,
-                )
+            try:
+                if sym.kind == "function":
+                    self.store.create_function(
+                        sym.id, sym.name, sym.file_path,
+                        sym.line_start, sym.line_end,
+                        sym.signature, sym.visibility, sym.is_method,
+                    )
+                elif sym.kind == "class":
+                    self.store.create_class(
+                        sym.id, sym.name, sym.file_path,
+                        sym.line_start, sym.line_end, sym.visibility,
+                    )
+                elif sym.kind == "type":
+                    self.store.create_type(
+                        sym.id, sym.name, sym.file_path,
+                        sym.line_start, sym.line_end,
+                    )
+                elif sym.kind == "variable":
+                    self.store.create_variable(
+                        sym.id, sym.name, sym.file_path,
+                        sym.line_start, sym.line_end,
+                    )
+            except RuntimeError:
+                pass  # duplicate PK — skip
 
         # Create resolved edges; collect unresolved for later
         edges_created = 0

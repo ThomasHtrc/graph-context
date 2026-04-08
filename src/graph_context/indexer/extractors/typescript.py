@@ -245,6 +245,10 @@ class _ExtractionContext:
             ))
             self.edges.append(EdgeRef("CONTAINS_VAR", "File", self.file_path, "Variable", var_id))
 
+        # Always recurse into value to find nested calls (e.g., const x = this.method())
+        if value_node:
+            self.visit(value_node)
+
     def _register_function(
         self, node: Node, name: str, is_method: bool, decl_node: Node | None = None,
     ) -> None:
