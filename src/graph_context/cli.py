@@ -11,6 +11,7 @@ import click
 from . import config
 from .storage.store import GraphStore
 from .indexer.structure import StructureIndexer
+from .indexer.history import HistoryIndexer
 from .indexer import git_ops
 
 
@@ -78,11 +79,34 @@ def index(ctx: click.Context, incremental: bool, layer: str) -> None:
                 f"({elapsed:.2f}s)"
             )
 
-        # TODO: history and planning indexers
+        if layer in ("history", "all"):
+            if git_ops.is_git_repo(repo):
+                hist_indexer = HistoryIndexer(store, repo)
+                t0 = time.time()
+
+                since = meta.get("last_history_commit") if incremental else None
+                hist_stats = hist_indexer.index(since_hash=since)
+
+                elapsed = time.time() - t0
+                click.echo(
+                    f"History index: "
+                    f"{hist_stats['commits']} commits, "
+                    f"{hist_stats['changes']} changes, "
+                    f"{hist_stats['affects']} affects, "
+                    f"{hist_stats['co_changes']} co-change edges "
+                    f"({elapsed:.2f}s)"
+                )
+            else:
+                click.echo("History index: skipped (not a git repo)")
+
+        # TODO: planning indexer
 
     # Update meta
     head = git_ops.get_head_hash(repo) if git_ops.is_git_repo(repo) else None
-    meta["last_commit"] = head
+    if layer in ("structure", "all"):
+        meta["last_commit"] = head
+    if layer in ("history", "all"):
+        meta["last_history_commit"] = head
     config.save_meta(repo, meta)
 
 
@@ -242,6 +266,120 @@ def query_cycles(ctx: click.Context, fmt: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# history queries
+# ---------------------------------------------------------------------------
+
+@query.command("recent")
+@click.argument("path")
+@click.option("--since", default="30", help="Number of days to look back (default: 30).")
+@click.option("--limit", "max_results", default=20, help="Max results.")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_recent(ctx: click.Context, path: str, since: str, max_results: int, fmt: str) -> None:
+    """Show recent changes to a file or module."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        # Try as a file first, then as a module path prefix
+        rows = store.query(
+            """
+            MATCH (f:File)-[:CHANGED_IN]->(c:Commit)
+            WHERE f.path STARTS WITH $path OR f.path = $path
+            RETURN f.path AS file, c.message AS commit_message,
+                   c.author AS author, c.timestamp AS timestamp
+            ORDER BY c.timestamp DESC
+            LIMIT $lim
+            """,
+            {"path": path, "lim": max_results},
+        )
+        _output(rows, ["file", "commit_message", "author", "timestamp"], fmt)
+
+
+@query.command("co-changes")
+@click.argument("file")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_co_changes(ctx: click.Context, file: str, fmt: str) -> None:
+    """Show files that frequently change together with a given file."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        rows = store.query(
+            """
+            MATCH (f:File {path: $fp})-[r:CO_CHANGES_WITH]->(other:File)
+            RETURN other.path AS co_changed_file, r.count AS times
+            ORDER BY r.count DESC
+            """,
+            {"fp": file},
+        )
+        _output(rows, ["co_changed_file", "times"], fmt)
+
+
+@query.command("churn")
+@click.argument("path")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_churn(ctx: click.Context, path: str, fmt: str) -> None:
+    """Show most frequently changed files in a module/directory."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        rows = store.query(
+            """
+            MATCH (f:File)-[:CHANGED_IN]->(c:Commit)
+            WHERE f.path STARTS WITH $path
+            RETURN f.path AS file, count(c) AS changes
+            ORDER BY changes DESC
+            """,
+            {"path": path},
+        )
+        _output(rows, ["file", "changes"], fmt)
+
+
+@query.command("authors")
+@click.argument("path")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_authors(ctx: click.Context, path: str, fmt: str) -> None:
+    """Show who has worked on a file or module."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        rows = store.query(
+            """
+            MATCH (f:File)-[:CHANGED_IN]->(c:Commit)
+            WHERE f.path STARTS WITH $path OR f.path = $path
+            RETURN c.author AS author, count(c) AS commits
+            ORDER BY commits DESC
+            """,
+            {"path": path},
+        )
+        _output(rows, ["author", "commits"], fmt)
+
+
+@query.command("affected-symbols")
+@click.argument("commit_hash")
+@click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table")
+@click.pass_context
+def query_affected_symbols(ctx: click.Context, commit_hash: str, fmt: str) -> None:
+    """Show which functions/classes were affected by a commit."""
+    repo = ctx.obj["repo"]
+    with GraphStore(config.get_db_path(repo)) as store:
+        store.ensure_schema()
+        rows = store.query(
+            """
+            MATCH (c:Commit {hash: $hash})-[:INCLUDES]->(ch:Change)-[:AFFECTS_FUNC]->(fn:Function)
+            RETURN 'function' AS kind, fn.name AS name, fn.file_path AS file, ch.file_path AS changed_file
+            UNION ALL
+            MATCH (c:Commit {hash: $hash})-[:INCLUDES]->(ch:Change)-[:AFFECTS_CLASS]->(cls:Class)
+            RETURN 'class' AS kind, cls.name AS name, cls.file_path AS file, ch.file_path AS changed_file
+            """,
+            {"hash": commit_hash},
+        )
+        _output(rows, ["kind", "name", "file", "changed_file"], fmt)
+
+
+# ---------------------------------------------------------------------------
 # cypher (escape hatch)
 # ---------------------------------------------------------------------------
 
@@ -269,7 +407,7 @@ def stats(ctx: click.Context) -> None:
     repo = ctx.obj["repo"]
     with GraphStore(config.get_db_path(repo)) as store:
         store.ensure_schema()
-        for label in ("File", "Module", "Function", "Class", "Type", "Variable", "Endpoint", "Event", "Schema"):
+        for label in ("File", "Module", "Function", "Class", "Type", "Variable", "Endpoint", "Event", "Schema", "Commit", "Change", "Plan", "Intent"):
             rows = store.query(f"MATCH (n:{label}) RETURN count(n)")
             count = rows[0][0] if rows else 0
             if count > 0:

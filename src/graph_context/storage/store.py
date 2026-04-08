@@ -199,12 +199,13 @@ class GraphStore:
         """Create a relationship between two nodes by their primary keys.
 
         from_id/to_id are matched against the PK field:
-          - File: path
-          - Module: path
+          - File, Module: path
+          - Commit: hash
           - All others: id
         """
-        from_pk = "path" if from_table in ("File", "Module") else "id"
-        to_pk = "path" if to_table in ("File", "Module") else "id"
+        pk_map = {"File": "path", "Module": "path", "Commit": "hash"}
+        from_pk = pk_map.get(from_table, "id")
+        to_pk = pk_map.get(to_table, "id")
 
         prop_clause = ""
         params: dict[str, Any] = {"fid": from_id, "tid": to_id}
